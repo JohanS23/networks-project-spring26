@@ -43,42 +43,36 @@ CONTINENT_COLORS = {
 # ─────────────────────────────────────────────
 
 def measure_rtt(url: str, probes: int = PROBES) -> dict:
-    """
-    Measure RTT to `url` using HTTP requests.
-
-    Return:
-        {
-            "min_ms":   float | None,
-            "mean_ms":  float | None,
-            "median_ms":float | None,
-            "loss_pct": float,
-            "samples":  list[float],
-        }
-
-    TODO:
-        1. Loop `probes` times.
-        2. Record time before and after urllib.request.urlopen(url, timeout=3).
-           elapsed_ms = (time.perf_counter() - start) * 1000
-        3. On any exception, count as lost.
-        4. Compute min, mean, median using numpy.
-        5. loss_pct = (lost / probes) * 100
-        6. Sleep 0.2s between probes.
-        7. If ALL probes lost, return None for all stats.
-    """
     samples = []
-    lost    = 0
+    lost = 0
 
     for _ in range(probes):
-        # TODO: send probe
+        try:
+            start = time.perf_counter()
+            urllib.request.urlopen(url, timeout=3)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            samples.append(elapsed_ms)
+        except Exception:
+            lost += 1
+
         time.sleep(0.2)
 
     if not samples:
-        return {"min_ms": None, "mean_ms": None, "median_ms": None,
-                "loss_pct": 100.0, "samples": []}
+        return {
+            "min_ms": None,
+            "mean_ms": None,
+            "median_ms": None,
+            "loss_pct": 100.0,
+            "samples": []
+        }
 
-    # TODO: compute and return stats
-    return {}  # placeholder
-
+    return {
+        "min_ms": float(np.min(samples)),
+        "mean_ms": float(np.mean(samples)),
+        "median_ms": float(np.median(samples)),
+        "loss_pct": (lost / probes) * 100,
+        "samples": samples
+    }
 
 # ─────────────────────────────────────────────
 # TASK 2 — HAVERSINE + INEFFICIENCY
