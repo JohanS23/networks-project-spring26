@@ -79,20 +79,21 @@ def measure_rtt(url: str, probes: int = PROBES) -> dict:
 # ─────────────────────────────────────────────
 
 def great_circle_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """
-    Compute great-circle distance in km using the Haversine formula.
+    R = 6371  # Earth radius in km
 
-    Haversine:
-        a = sin²(Δlat/2) + cos(lat1) * cos(lat2) * sin²(Δlon/2)
-        c = 2 * atan2(√a, √(1−a))
-        d = R * c       where R = 6371 km
+    # convert to radians
+    lat1 = math.radians(lat1)
+    lon1 = math.radians(lon1)
+    lat2 = math.radians(lat2)
+    lon2 = math.radians(lon2)
 
-    TODO: implement from scratch. Use math.radians() to convert degrees.
-    Do NOT use geopy or any distance library.
-    """
-    R = 6371
-    # TODO
-    return 0.0  # placeholder
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return R * c
 
 
 def get_my_location() -> tuple[float, float, str]:
@@ -107,22 +108,28 @@ def get_my_location() -> tuple[float, float, str]:
 
 
 def compute_inefficiency(results: dict, src_lat: float, src_lon: float) -> dict:
-    """
-    Annotate each city in results with:
-        "distance_km"        — great-circle distance from source
-        "theoretical_min_ms" — 2 * (distance / FIBER_SPEED_KM_S) * 1000
-        "inefficiency_ratio" — median_ms / theoretical_min_ms
-        "high_inefficiency"  — True if ratio > 3.0
-
-    TODO:
-        1. For each city, unpack coords and call great_circle_km().
-        2. Compute theoretical_min_ms (* 2 for round-trip, * 1000 for ms).
-        3. Compute ratio. If median_ms is None, set ratio to None.
-        4. Annotate results[city] in place.
-    """
     for city, data in results.items():
-        # TODO
-        pass
+        lat2, lon2 = data["coords"]
+
+        # 1. Distance
+        distance = great_circle_km(src_lat, src_lon, lat2, lon2)
+
+        # 2. Theoretical RTT
+        theoretical = (distance / FIBER_SPEED_KM_S) * 2 * 1000
+
+        # 3. Inefficiency ratio
+        median = data.get("median_ms")
+        if median is not None and theoretical > 0:
+            ratio = median / theoretical
+        else:
+            ratio = None
+
+        # 4. Save into dict
+        data["distance_km"] = distance
+        data["theoretical_min_ms"] = theoretical
+        data["inefficiency_ratio"] = ratio
+        data["high_inefficiency"] = (ratio is not None and ratio > 3.0)
+
     return results
 
 
@@ -131,49 +138,78 @@ def compute_inefficiency(results: dict, src_lat: float, src_lon: float) -> dict:
 # ─────────────────────────────────────────────
 
 def make_plots(results: dict):
-    """
-    Produce two figures saved to FIGURES_DIR/.
-
-    Figure 1 — fig1_rtt_comparison.png
-        Grouped bar chart: measured median RTT vs. theoretical min RTT per city.
-        Sort cities by distance_km ascending.
-        Label axes, add legend and title.
-
-    Figure 2 — fig2_distance_scatter.png
-        Scatter: x = distance_km, y = measured median RTT.
-        Draw a dashed line for theoretical minimum.
-        Label each point with city name.
-        Color by continent using CONTINENT_COLORS.
-        Add continent legend and title.
-
-    TODO: implement both figures.
-    Hints:
-        fig, ax = plt.subplots(figsize=(11, 6))
-        ax.bar() / ax.scatter()
-        plt.tight_layout()
-        plt.savefig(path, dpi=150, bbox_inches="tight")
-        plt.close()
-    """
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    valid  = {c: d for c, d in results.items() if d.get("median_ms") is not None}
+
+    # Filter valid cities (exclude unreachable)
+    valid = {c: d for c, d in results.items() if d.get("median_ms") is not None}
+
+    # Sort by distance
     cities = sorted(valid, key=lambda c: valid[c]["distance_km"])
 
     # ── Figure 1 ──────────────────────────────
     fig, ax = plt.subplots(figsize=(11, 6))
-    # TODO
+
+    medians = [valid[c]["median_ms"] for c in cities]
+    theoretical = [valid[c]["theoretical_min_ms"] for c in cities]
+
+    x = np.arange(len(cities))
+    width = 0.35
+
+    # Bar chart
+    ax.bar(x - width/2, medians, width, label="Measured RTT")
+    ax.bar(x + width/2, theoretical, width, label="Theoretical Min RTT")
+
+    # Labels
+    ax.set_xticks(x)
+    ax.set_xticklabels(cities, rotation=45)
+    ax.set_ylabel("RTT (ms)")
+    ax.set_title("Measured vs Theoretical RTT by City")
+    ax.legend()
+
     plt.tight_layout()
     plt.savefig(f"{FIGURES_DIR}/fig1_rtt_comparison.png", dpi=150, bbox_inches="tight")
     plt.close()
 
     # ── Figure 2 ──────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 7))
-    # TODO
+
+    # Scatter points
+    for city in cities:
+        d = valid[city]
+        ax.scatter(
+            d["distance_km"],
+            d["median_ms"],
+            color=CONTINENT_COLORS[d["continent"]],
+        )
+        ax.text(d["distance_km"], d["median_ms"], city)
+
+    # Theoretical line
+    distances = np.linspace(0, max(valid[c]["distance_km"] for c in cities), 100)
+    theoretical_line = (distances / FIBER_SPEED_KM_S) * 2 * 1000
+
+    ax.plot(distances, theoretical_line, linestyle="--", label="Theoretical Min")
+
+    # Labels
+    ax.set_xlabel("Distance (km)")
+    ax.set_ylabel("RTT (ms)")
+    ax.set_title("RTT vs Distance")
+
+    # Legend (continents)
+    handles = []
+    seen = set()
+    for city in cities:
+        cont = valid[city]["continent"]
+        if cont not in seen:
+            handles.append(mpatches.Patch(color=CONTINENT_COLORS[cont], label=cont))
+            seen.add(cont)
+
+    ax.legend(handles=handles)
+
     plt.tight_layout()
     plt.savefig(f"{FIGURES_DIR}/fig2_distance_scatter.png", dpi=150, bbox_inches="tight")
     plt.close()
 
     print(f"Figures saved to {FIGURES_DIR}/")
-
 
 # ─────────────────────────────────────────────
 # MAIN
